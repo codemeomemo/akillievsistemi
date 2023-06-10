@@ -1,0 +1,212 @@
+#include <RCSwitch.h>
+#include <Arduino.h>
+#include <Firebase_ESP_Client.h>
+#include <WiFiManager.h>
+
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
+
+#define API_KEY " " // "" içerisine kendi Firebase API anahtarınızı yazınız.
+
+#define DATABASE_URL " " // "" içerisine kendi Firebase Database URL'nizi yazınız.
+
+// Pin tanımlamaları
+#define buzzer 18  
+#define wifires 32
+#define ledwifi 33
+#define ledveri 26
+
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+unsigned long sendDataPrevMillis = 0;
+unsigned long getDataPrevMillis = 0;
+int count = 1;
+bool signupOK = false;
+String alarmData;
+int alarmsonuc;
+int lojikdata;
+bool res;
+
+int buttonState = 0;
+unsigned long buttonTime = 0;
+unsigned long currentTime = 0;
+
+WiFiManager wm;
+RCSwitch mySwitch = RCSwitch();
+
+void setup()
+{
+  Serial.begin(115200);
+  
+  mySwitch.enableReceive(27); // Alıcı pini D25'a bağlı
+  mySwitch.setProtocol(1); 
+
+  pinMode(buzzer, OUTPUT);
+  pinMode(wifires, INPUT_PULLUP);
+  pinMode(ledwifi, OUTPUT);
+  pinMode(ledveri, OUTPUT);
+  
+  digitalWrite(buzzer, LOW);
+  digitalWrite(ledwifi, LOW);
+  digitalWrite(ledveri, LOW);
+  
+  WiFi.mode(WIFI_STA);
+
+  // autoConnet("AĞ_ADI","ŞİFRE");
+  res = wm.autoConnect(" ", " "); // Eğer daha önce wifi ağına bağlanmışsa o ağa tekrar bağlanmaya çalışır, bağlanamaz ise kendisi hotspot durumuna geçer.
+
+  if(!res)
+  { 
+    Serial.println("Bağlantı Sağlanamadı");
+  }
+  else 
+  {
+    Serial.println("Ağ Bağlantısı Kuruldu");
+    digitalWrite(ledwifi, HIGH);  
+  }
+  
+  config.api_key = API_KEY;
+
+  config.database_url = DATABASE_URL;
+
+  if (Firebase.signUp(&config, &auth, "", "")) {
+    Serial.println("ok");
+    signupOK = true;
+  }
+  else {
+    Serial.printf("%s\n", config.signer.signupError.message.c_str());
+  }
+  
+  config.token_status_callback = tokenStatusCallback; 
+
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+}
+
+void loop()
+{
+  buttonState = digitalRead(wifires);
+  
+  if (mySwitch.available()) 
+  { 
+      int receivedData = mySwitch.getReceivedValue();
+
+     if(receivedData != 0)
+     {
+        lojikdata = receivedData; 
+     }
+     mySwitch.resetAvailable();
+     
+      Serial.print("Alınan veri: ");
+     Serial.println(receivedData);
+     degistir();
+  }
+
+  if (Firebase.ready() && signupOK && (millis() - getDataPrevMillis > 10000 || getDataPrevMillis == 0)) {
+   getDataPrevMillis = millis();
+   if (Firebase.RTDB.getString(&fbdo, "alarm")) {
+        alarmData = fbdo.stringData();
+        Serial.println(alarmData);
+    }
+    else {
+      Serial.println(fbdo.errorReason());
+    }
+    alarmsonuc = atoi(alarmData.c_str());
+  }
+
+  if(alarmsonuc == 1) alarm();
+
+  if (buttonState == LOW) {      // Buton basılıysa
+    if (buttonTime == 0) {        // Buton daha önce basılmamışsa, son basılma zamanını kaydet
+      buttonTime = millis();
+    }
+    currentTime = millis();
+    if ((currentTime - buttonTime) > 3000) {   // Buton 3 saniyeden uzun basılı kalmışsa
+      WiFi.disconnect(true);
+      delay(2000);
+      wm.resetSettings();
+      delay(3000);
+      ESP.restart();
+      delay(5000);
+    }
+  } 
+  else {                        // Buton basılı değilse
+    buttonTime = 0;               // Son basılma zamanını sıfırla
+               
+  }
+  }
+
+
+void degistir(){
+
+    // KAPI AÇILDI
+    if ((lojikdata == 1) && Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 1000 || sendDataPrevMillis == 0)) {
+    sendDataPrevMillis = millis();
+    
+    if (Firebase.RTDB.setString(&fbdo, "kapidurum", "1")) {
+      Serial.println("YAZMA TAMAM");
+      Serial.println("DİZİN: " + fbdo.dataPath());
+    }
+    else {
+      Serial.println("HATA");
+      Serial.println("HATA SEBEBİ: " + fbdo.errorReason());
+    }
+      digitalWrite(ledveri, HIGH);
+      delay(50);
+      digitalWrite(ledveri, LOW);
+      delay(50);
+      digitalWrite(ledveri, HIGH);
+      delay(50);
+      digitalWrite(ledveri, LOW);
+  }
+
+    
+    // KAPI KAPANDI
+    if ((lojikdata == 2) && Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 1000 || sendDataPrevMillis == 0)) {
+    sendDataPrevMillis = millis();
+    
+    if (Firebase.RTDB.setString(&fbdo, "kapidurum", "0")) {
+      Serial.println("YAZMA TAMAM");
+      Serial.println("DİZİN: " + fbdo.dataPath());
+    }
+    else {
+      Serial.println("HATA");
+      Serial.println("HATA SEBEBİ: " + fbdo.errorReason());
+    }
+      digitalWrite(ledveri, HIGH);
+      delay(50);
+      digitalWrite(ledveri, LOW);
+      delay(50);
+      digitalWrite(ledveri, HIGH);
+      delay(50);
+      digitalWrite(ledveri, LOW);
+  }
+
+  loop();
+  }
+
+void alarm()
+{
+  if (Firebase.ready() && signupOK && (millis() - getDataPrevMillis > 10000 || getDataPrevMillis == 0)) {
+   getDataPrevMillis = millis();
+   if (Firebase.RTDB.getString(&fbdo, "alarm")) {
+        alarmData = fbdo.stringData();
+        Serial.println(alarmData);
+    }
+    else {
+      Serial.println(fbdo.errorReason());
+    }
+    alarmsonuc = atoi(alarmData.c_str());
+  }
+  if(alarmsonuc == 1){
+    digitalWrite(buzzer,HIGH);
+    delay(100);
+    digitalWrite(buzzer,LOW);
+    delay(100);
+    }
+    else{
+    loop();
+    }
+}
